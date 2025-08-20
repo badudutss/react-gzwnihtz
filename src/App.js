@@ -1,241 +1,265 @@
-import React, { useState, useEffect } from 'react';
-import { db, ref, onValue, push, set, remove } from './firebase';
+import React, { useEffect, useState } from "react";
+import * as XLSX from "xlsx";
+import { initializeApp } from "firebase/app";
+import {
+  getDatabase,
+  ref,
+  onValue,
+  push,
+  update,
+  remove,
+} from "firebase/database";
+
+// 🔑 Firebase Config
+const firebaseConfig = {
+  apiKey: "AIzaSyCil-Qi2IYPzdkWSTvJRj2LdEwTVtXxHao",
+  authDomain: "wallet-driver-1fa85.firebaseapp.com",
+  databaseURL:
+    "https://wallet-driver-1fa85-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "wallet-driver-1fa85",
+  storageBucket: "wallet-driver-1fa85.firebasestorage.app",
+  messagingSenderId: "767103242077",
+  appId: "1:767103242077:web:52b80303b803e0abd222b4",
+  measurementId: "G-FDHT14K0EC",
+};
+
+// 🔥 Init Firebase
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
 
 export default function DriverWalletApp() {
   const [transactions, setTransactions] = useState([]);
-  const [driver, setDriver] = useState("jonathan");
-  const [amount, setAmount] = useState("");
-  const [type, setType] = useState("credit");
-  const [description, setDescription] = useState("");
-  const [bookingNumber, setBookingNumber] = useState("");
-  const [dateFilter, setDateFilter] = useState("");
-  const [driverFilter, setDriverFilter] = useState("");
-  const [editId, setEditId] = useState(null);
-  const [saveMessage, setSaveMessage] = useState("");
-  const [currentTime, setCurrentTime] = useState("");
+  const [filterDriver, setFilterDriver] = useState("All Drivers");
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({
+    id: null,
+    bookingNumber: "",
+    description: "",
+    amount: "",
+    type: "Debit",
+    driver: "jun",
+  });
 
+  // 📥 Fetch transactions in real time
   useEffect(() => {
-    const transactionsRef = ref(db, 'transactions');
-    onValue(transactionsRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const loaded = Object.keys(data).map(id => ({ id, ...data[id] }));
-        setTransactions(loaded.reverse());
+    const transactionsRef = ref(db, "transactions");
+    const unsubscribe = onValue(transactionsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        const formatted = Object.entries(data).map(([id, value]) => ({
+          id,
+          driver: value.driver || "Unknown",
+          bookingNumber: value.bookingNumber || "",
+          description: value.description || "",
+          amount: value.amount || 0,
+          type: value.type?.toLowerCase() === "credit" ? "Credit" : "Debit",
+          createdAt: value.date ? new Date(value.date) : new Date(),
+        }));
+
+        // ✅ Newest first
+        const sorted = formatted.sort((a, b) => b.createdAt - a.createdAt);
+        setTransactions(sorted);
       } else {
         setTransactions([]);
       }
+      setLoading(false);
     });
+
+    return () => unsubscribe();
   }, []);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = new Date();
-      const timeString = now.toLocaleTimeString('en-PH', { hour12: false });
-      const dateString = now.toLocaleDateString('en-PH');
-      setCurrentTime(`${dateString} ${timeString}`);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  // 📊 Wallet balances
+  const totalJun = transactions
+    .filter((t) => t.driver.toLowerCase() === "jun")
+    .reduce((sum, t) => sum + (t.type === "Credit" ? t.amount : -t.amount), 0);
 
-  const addTransaction = () => {
-    if (!amount || isNaN(amount)) return;
+  const totalJonathan = transactions
+    .filter((t) => t.driver.toLowerCase() === "jonathan")
+    .reduce((sum, t) => sum + (t.type === "Credit" ? t.amount : -t.amount), 0);
+
+  const totalWallet = totalJun + totalJonathan;
+
+  // 🔍 Filtered list
+  const filteredTransactions =
+    filterDriver === "All Drivers"
+      ? transactions
+      : transactions.filter(
+          (t) => t.driver.toLowerCase() === filterDriver.toLowerCase()
+        );
+
+  // ➕ Add or ✏️ Edit transaction
+  const handleSubmit = (e) => {
+    e.preventDefault();
     const transactionData = {
-      driver,
-      type,
-      description,
-      bookingNumber,
-      amount: parseFloat(amount),
-      date: new Date().toLocaleDateString("en-CA") + " " + new Date().toLocaleTimeString()
+      bookingNumber: form.bookingNumber,
+      description: form.description,
+      amount: parseFloat(form.amount),
+      type: form.type.toLowerCase(),
+      driver: form.driver,
+      date: new Date().toLocaleString(),
     };
 
-    if (editId) {
-      set(ref(db, `transactions/${editId}`), transactionData);
+    if (form.id) {
+      // Update
+      update(ref(db, `transactions/${form.id}`), transactionData);
     } else {
-      push(ref(db, 'transactions'), transactionData);
+      // Add new
+      push(ref(db, "transactions"), transactionData);
     }
 
-    setAmount("");
-    setDescription("");
-    setBookingNumber("");
-    setEditId(null);
-    setDateFilter("");
-    setDriverFilter("");
-    setSaveMessage("✅ Data saved!");
-    setTimeout(() => setSaveMessage(""), 2000);
+    setForm({
+      id: null,
+      bookingNumber: "",
+      description: "",
+      amount: "",
+      type: "Debit",
+      driver: "jun",
+    });
   };
 
-  const handleEdit = (t) => {
-    setDriver(t.driver);
-    setType(t.type);
-    setAmount(t.amount.toString());
-    setDescription(t.description);
-    setBookingNumber(t.bookingNumber);
-    setEditId(t.id);
-  };
-
+  // 🗑 Delete transaction
   const handleDelete = (id) => {
     remove(ref(db, `transactions/${id}`));
   };
 
-  const calculateTotal = (driver) => {
-    return transactions
-      .filter(t => t.driver === driver && (!dateFilter || t.date.startsWith(dateFilter)))
-      .reduce((sum, t) => sum + (t.type === "credit" ? t.amount : -t.amount), 0);
+  // ✏️ Edit transaction
+  const handleEdit = (t) => {
+    setForm({
+      id: t.id,
+      bookingNumber: t.bookingNumber,
+      description: t.description,
+      amount: t.amount,
+      type: t.type,
+      driver: t.driver,
+    });
   };
 
+  // 📤 Export to Excel
   const exportToExcel = () => {
-    const headers = ["Driver", "Booking #", "Description", "Date", "Type", "Amount"];
-    const rows = transactions.map(t => [
-      t.driver === "jonathan" ? "Jonathan Besana" : "Jun Alabado",
-      t.bookingNumber,
-      t.description,
-      t.date,
-      t.type,
-      t.amount.toFixed(2)
-    ]);
-    const csv = [headers, ...rows].map(e => e.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", "wallet_transactions.csv");
-    link.style.visibility = "hidden";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const ws = XLSX.utils.json_to_sheet(
+      transactions.map((t) => ({
+        Date: t.createdAt ? t.createdAt.toLocaleString() : "-",
+        Driver: t.driver,
+        BookingNumber: t.bookingNumber,
+        Description: t.description,
+        Debit: t.type === "Debit" ? t.amount : "",
+        Credit: t.type === "Credit" ? t.amount : "",
+      }))
+    );
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Transactions");
+    XLSX.writeFile(wb, "transactions.xlsx");
   };
 
   return (
-    <div className="p-6 space-y-6 font-sans">
-      <div className="flex justify-between items-start">
-        <div>
-          <h1 className="text-2xl font-bold">Driver Wallet Tracker</h1>
-          <div className="text-sm font-medium text-gray-500">{currentTime}</div>
-        </div>
-        <div className="text-right space-y-1">
-          <div className="text-lg font-bold">Total Wallet</div>
-          <div className="text-5xl font-extrabold text-green-600">
-            ₱{(calculateTotal("jonathan") + calculateTotal("jun")).toFixed(2)}
-          </div>
-          <div className="text-sm text-gray-700">
-            Jonathan: ₱{calculateTotal("jonathan").toFixed(2)}<br />
-            Jun: ₱{calculateTotal("jun").toFixed(2)}
-          </div>
-        </div>
-      </div>
+    <div style={{ padding: "10px", fontFamily: "Arial" }}>
+      <h2>Driver Wallet Tracker</h2>
+      <p>{new Date().toLocaleString()}</p>
+      <p>Total Wallet: ₱{totalWallet.toFixed(2)}</p>
+      <p>Jun: ₱{totalJun.toFixed(2)}</p>
+      <p>Jonathan: ₱{totalJonathan.toFixed(2)}</p>
 
-      {saveMessage && (
-        <div className="text-green-600 text-sm font-medium">{saveMessage}</div>
-      )}
-
-      <div className="flex justify-between items-center gap-4">
-        <input
-          type="date"
-          className="border px-2 py-1 rounded"
-          value={dateFilter}
-          onChange={(e) => setDateFilter(e.target.value)}
-        />
+      {/* 🚦 Controls */}
+      <div style={{ marginBottom: "10px" }}>
         <select
-          className="border px-2 py-1 rounded"
-          value={driverFilter}
-          onChange={(e) => setDriverFilter(e.target.value)}
+          value={filterDriver}
+          onChange={(e) => setFilterDriver(e.target.value)}
         >
-          <option value="">All Drivers</option>
-          <option value="jonathan">Jonathan Besana</option>
-          <option value="jun">Jun Alabado</option>
+          <option>All Drivers</option>
+          <option>Jun</option>
+          <option>Jonathan</option>
         </select>
-        <button
-          onClick={exportToExcel}
-          className="bg-blue-600 text-white px-4 py-1 rounded"
-        >
+        <button onClick={exportToExcel} style={{ marginLeft: "10px" }}>
           Export to Excel
         </button>
       </div>
 
-      <div className="border rounded-lg p-4">
-        <div className="grid grid-cols-6 gap-2 mb-2">
-          <select
-            className="border px-2 py-1 rounded"
-            value={driver}
-            onChange={(e) => setDriver(e.target.value)}
-          >
-            <option value="jonathan">Jonathan Besana</option>
-            <option value="jun">Jun Alabado</option>
-          </select>
-          <input
-            type="text"
-            placeholder="Booking Number"
-            className="border px-2 py-1 rounded"
-            value={bookingNumber}
-            onChange={(e) => setBookingNumber(e.target.value)}
-          />
-          <input
-            type="text"
-            placeholder="Description"
-            className="border px-2 py-1 rounded"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          <input
-            type="number"
-            placeholder="Amount"
-            className="border px-2 py-1 rounded"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-          />
-          <select
-            className="border px-2 py-1 rounded"
-            value={type}
-            onChange={(e) => setType(e.target.value)}
-          >
-            <option value="credit">Credit</option>
-            <option value="debit">Debit</option>
-          </select>
-          <button
-            onClick={addTransaction}
-            className="bg-green-600 text-white px-4 py-1 rounded"
-          >
-            {editId ? "Update" : "Add Transaction"}
-          </button>
-        </div>
-      </div>
+      {/* 📝 Add/Edit Transaction */}
+      <form onSubmit={handleSubmit} style={{ marginBottom: "20px" }}>
+        <input
+          type="text"
+          placeholder="Booking #"
+          value={form.bookingNumber}
+          onChange={(e) => setForm({ ...form, bookingNumber: e.target.value })}
+          required
+        />
+        <input
+          type="text"
+          placeholder="Description"
+          value={form.description}
+          onChange={(e) => setForm({ ...form, description: e.target.value })}
+          required
+        />
+        <input
+          type="number"
+          step="0.01"
+          placeholder="Amount"
+          value={form.amount}
+          onChange={(e) => setForm({ ...form, amount: e.target.value })}
+          required
+        />
+        <select
+          value={form.type}
+          onChange={(e) => setForm({ ...form, type: e.target.value })}
+        >
+          <option>Debit</option>
+          <option>Credit</option>
+        </select>
+        <select
+          value={form.driver}
+          onChange={(e) => setForm({ ...form, driver: e.target.value })}
+        >
+          <option>jun</option>
+          <option>jonathan</option>
+        </select>
+        <button type="submit">
+          {form.id ? "Update Transaction" : "Add Transaction"}
+        </button>
+      </form>
 
-      <div className="border rounded-lg p-4">
-        <h2 className="text-lg font-semibold mb-2">All Transaction History</h2>
-        <div className="overflow-x-auto">
-          <table className="table-auto min-w-full whitespace-nowrap text-sm">
-            <thead>
-              <tr className="bg-gray-100">
-                <th className="px-4 py-2 text-left">Date</th>
-                <th className="px-4 py-2 text-left">Driver</th>
-                <th className="px-4 py-2 text-left">Booking #</th>
-                <th className="px-4 py-2 text-left">Description</th>
-                <th className="px-4 py-2 text-left">Debit</th>
-                <th className="px-4 py-2 text-left">Credit</th>
-                <th className="px-4 py-2 text-left">Actions</th>
+      {/* 📜 Transaction History */}
+      <h3>All Transaction History</h3>
+      {loading ? (
+        <p>Loading transaction history...</p>
+      ) : (
+        <table
+          border="1"
+          cellPadding="5"
+          style={{ borderCollapse: "collapse", width: "100%" }}
+        >
+          <thead style={{ backgroundColor: "#f2f2f2" }}>
+            <tr>
+              <th>Date</th>
+              <th>Driver</th>
+              <th>Booking #</th>
+              <th>Description</th>
+              <th>Debit</th>
+              <th>Credit</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredTransactions.map((t) => (
+              <tr key={t.id}>
+                <td>{t.createdAt ? t.createdAt.toLocaleString() : "-"}</td>
+                <td>{t.driver}</td>
+                <td>{t.bookingNumber}</td>
+                <td>{t.description}</td>
+                <td style={{ textAlign: "right" }}>
+                  {t.type === "Debit" ? `₱${t.amount.toFixed(2)}` : ""}
+                </td>
+                <td style={{ textAlign: "right" }}>
+                  {t.type === "Credit" ? `₱${t.amount.toFixed(2)}` : ""}
+                </td>
+                <td>
+                  <button onClick={() => handleEdit(t)}>Edit</button>
+                  <button onClick={() => handleDelete(t.id)}>Delete</button>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {transactions
-                .filter(t => (!dateFilter || t.date.startsWith(dateFilter)) && (!driverFilter || t.driver === driverFilter))
-                .map(t => (
-                  <tr key={t.id} className="border-t">
-                    <td className="px-4 py-2">{t.date}</td>
-                    <td className="px-4 py-2">{t.driver === "jonathan" ? "Jonathan" : "Jun"}</td>
-                    <td className="px-4 py-2">{t.bookingNumber}</td>
-                    <td className="px-4 py-2">{t.description}</td>
-                    <td className="px-4 py-2 text-red-600">{t.type === "debit" ? `₱${t.amount.toFixed(2)}` : ""}</td>
-                    <td className="px-4 py-2 text-green-600">{t.type === "credit" ? `₱${t.amount.toFixed(2)}` : ""}</td>
-                    <td className="px-4 py-2">
-                      <button onClick={() => handleEdit(t)} className="text-blue-500 text-xs mr-2">Edit</button>
-                      <button onClick={() => handleDelete(t.id)} className="text-red-500 text-xs">Delete</button>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
